@@ -4,106 +4,94 @@ const port = process.env.PORT || 5000;
 const pool = require('./db');
 const path = require('path');
 var request = require('request');
-
-const crypto = require('crypto');
+const { v4: uuidv4 } = require('uuid');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const axios = require('axios'); // Import axios
+const multer = require('multer');
+const fs = require('fs'); // Import fs module
+
+const sharp = require('sharp');
+const axios = require('axios'); 
 const e = require('express');
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cors());
 app.use(bodyParser.json());
 
-const SECRET_KEY = '8gBm/:&EnhH.1/q';
-const randomNum = Math.random();
 
-const services = [
-  {
-    id: 1,
-    name: 'Product 1',
-    description: 'Description for Product 1',
-    price: '28',
-    image: {
-      url: '/manag.jpg',
-      width: 350,
-      height: 350
-    },
-    elevation: '2000-5000m',
-    duration: '8 days tour',
-    thumbnail_text: 'Ride to manang'
+
+
+// Setup multer for handling file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadPath = path.join(__dirname, 'public', 'images');
+    
+    // Check if directory exists, if not, create it
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+
+    cb(null, uploadPath);
   },
-  {
-    id: 2,
-    name: 'Product 2',
-    description: 'Description for Product 2',
-    price: '30',
-    image: {
-      url: '/dreambike.jpg',
-      width: 350,
-      height: 350
-    },
-    elevation: '1000-2000m',
-    duration: '5 days tour',
-    thumbnail_text: 'Dream bike tour'
-  },
-  // other services...
-];
+  filename: (req, file, cb) => {
+    cb(null, `${uuidv4()}_${file.originalname}`);
+  }
+});
 
-// // esewa Payment endpoint
-// app.post('/api/payment', async (req, res) => {
-//   try {
-//     const { amount, productCode, transactionUuid, ...otherData } = req.body;
+const upload = multer({ storage: storage });
 
-//     // Prepare request data for eSewa
-//     const data = {
-//       amount,
-//       tax_amount: 0, // Assuming no tax
-//       product_code: productCode || '1234',
-//       product_service_charge: 0,
-//       product_delivery_charge: 0,
-//       total_amount: amount,
-//       transaction_uuid: transactionUuid || randomNum,
-//       success_url: 'https://esewa.com.np', // Replace with your success URL
-//       failure_url: 'https://instagram.com', // Replace with your failure URL
-//       signed_field_names: 'total_amount,transaction_uuid,product_code',
-//     };
+// GET all services
+app.get('/api/services', async (req, res) => {
+  try {
+    const query = 'SELECT * FROM services';
+    const result = await pool.query(query);
+    
 
-//     // Generate HMAC signature
-//     const signature = generateSignature(data, SECRET_KEY);
-//     data.signature = signature;
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching services:', error);
+    res.status(500).json({ error: 'Failed to fetch services from the database' });
+  }
+});
 
-//      // Forward the request to eSewa API
-//      const esewaResponse = await axios.post('https://rc-epay.esewa.com.np/api/epay/main/v2/form', data, {
-//       headers: {
-//         'Content-Type': 'application/json',
-//       },
-//     });
+// POST endpoint to add a new service
+app.post('/api/services', upload.single('image'), async (req, res) => {
+  const { name, description, price, elevation, duration } = req.body;
+  const image = req.file ? `/images/${req.file.filename}` : null;
 
-//     res.json(esewaResponse.data); // Send the data to the client
-//     console.log(esewaResponse.data)
+  if (!name || !price || !image || !elevation || !duration) {
+    return res.status(400).json({ error: 'All fields are required' });
+  }
 
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ error: 'Internal Server Error' });
-//   }
-// });
+  try {
+    const newService = {
+      name,
+      description,
+      price,
+      image: {
+        url: image,
+      },
+      elevation,
+      duration,
+    };
 
-// // Function to generate HMAC signature
-// function generateSignature(data, secretKey) {
-//   const signedFieldNames = data.signed_field_names.split(',');
-//   let signatureData = '';
-//   signedFieldNames.forEach(field => {
-//     signatureData += `${field}=${data[field]},`;
-//   });
-//   signatureData = signatureData.slice(0, -1); // Remove the trailing comma
+    // Insert the new service into the database
+    const result = await pool.query(
+      'INSERT INTO services (name, description, price, image_url, elevation, duration) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [name, description, price, image, elevation, duration]
+    );
 
-//   return crypto.createHmac('sha256', secretKey).update(signatureData).digest('base64');
-// }
-
-// initiating a payment request
+    const insertedService = result.rows[0];
+    res.status(201).json(insertedService);
+  } catch (error) {
+    console.error('Error inserting service into database:', error);
+    res.status(500).json({ error: 'Failed to add service to the database' });
+  }
+});
 
 app.post('/api/payment',  (req,res) => {
+  const { amount, purchaseOrderId, purchaseOrderName, customerInfo } = req.body;
+
   var options = {
     'method': 'POST',
     'url': 'https://a.khalti.com/api/v2/epayment/initiate/',
@@ -114,14 +102,10 @@ app.post('/api/payment',  (req,res) => {
     body: JSON.stringify({
       "return_url": "http://localhost:5000/api/payment/callback",
     "website_url": "https://example.com/",
-    "amount": "1000",
-    "purchase_order_id": "Order01",
-    "purchase_order_name": "test",
-    "customer_info": {
-        "name": "Ram Bahadur",
-        "email": "test@khalti.com",
-        "phone": "9800000001"
-    }
+    "amount": amount,
+    "purchase_order_id": purchaseOrderId,
+    "purchase_order_name": purchaseOrderName,
+    "customer_info": customerInfo
     })
   }
   request(options, function(error,response) {
@@ -135,6 +119,30 @@ app.post('/api/payment',  (req,res) => {
     
   })
 })
+
+app.delete('/api/services/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Check if the service exists
+    const findQuery = 'SELECT * FROM services WHERE id = $1';
+    const findResult = await pool.query(findQuery, [id]);
+    const serviceToDelete = findResult.rows[0];
+
+    if (!serviceToDelete) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+
+    // Delete the service from the database
+    const deleteQuery = 'DELETE FROM services WHERE id = $1';
+    await pool.query(deleteQuery, [id]);
+
+    res.json({ message: 'Service deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting service:', error);
+    res.status(500).json({ error: 'Failed to delete service' });
+  }
+});
 
 app.get('/api/payment/callback', async(req, res) => {
   const {
@@ -176,13 +184,21 @@ app.get('/api/services', (req, res) => {
   res.json(services);
 });
 
-app.get('/api/services/:id', (req, res) => {
+app.get('/api/services/:id', async (req, res) => {
   const { id } = req.params;
-  const product = services.find(product => product.id === parseInt(id));
-  if (product) {
-    res.json(product);
-  } else {
-    res.status(404).json({ error: 'Product not found' });
+
+  try {
+    const result = await pool.query('SELECT * FROM services WHERE id = $1', [id]);
+    const product = result.rows[0];
+
+    if (product) {
+      res.json(product);
+    } else {
+      res.status(404).json({ error: 'Product not found' });
+    }
+  } catch (error) {
+    console.error('Error fetching product:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -269,6 +285,17 @@ app.get('/admin/bookings', async (req, res) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+app.get('/admin/payments', async (req, res) => {
+  try {
+    // Fetch bookings data from the database
+    const payments = await pool.query('SELECT id, transaction_id, total_amount, status, mobile, purchase_order_name, purchase_order_id FROM payments');
+    res.json(payments.rows); // Return the bookings data as JSON response
+  } catch (error) {
+    console.error('Error fetching payments:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
