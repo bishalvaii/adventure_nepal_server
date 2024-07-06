@@ -9,11 +9,6 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs'); // Import fs module
-
-const sharp = require('sharp');
-const axios = require('axios'); 
-const e = require('express');
-
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cors());
 app.use(bodyParser.json());
@@ -96,7 +91,7 @@ app.post('/api/payment',  (req,res) => {
     'method': 'POST',
     'url': 'https://a.khalti.com/api/v2/epayment/initiate/',
     'headers': {
-      'Authorization': ' Key 4d1b705d7843491081effd1114d4c5ce',
+      'Authorization': ' Key a479669f7ed341e6b949703468226895',
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -201,6 +196,44 @@ app.get('/api/services/:id', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+app.put('/api/services/:id', upload.single('image'), async (req, res) => {
+  const { id } = req.params;
+  const { name, description, price, elevation, duration } = req.body;
+  const image = req.file ? `/images/${req.file.filename}` : null;
+
+  if (!name || !price || !elevation || !duration) {
+    return res.status(400).json({ error: 'All fields except image are required' });
+  }
+
+  try {
+    // Check if the service exists
+    const findQuery = 'SELECT * FROM services WHERE id = $1';
+    const findResult = await pool.query(findQuery, [id]);
+    const serviceToUpdate = findResult.rows[0];
+
+    if (!serviceToUpdate) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+
+    // Update the service in the database
+    const updateQuery = `
+      UPDATE services 
+      SET name = $1, description = $2, price = $3, image_url = $4, elevation = $5, duration = $6 
+      WHERE id = $7 
+      RETURNING *
+    `;
+    const updateValues = [name, description, price, image, elevation, duration, id];
+    const result = await pool.query(updateQuery, updateValues);
+    const updatedService = result.rows[0];
+
+    res.json(updatedService);
+  } catch (error) {
+    console.error('Error updating service:', error);
+    res.status(500).json({ error: 'Failed to update service' });
+  }
+});
+
 
 app.post('/api/signup', async (req, res) => {
   const { username, email, password, confirmPassword } = req.body;
